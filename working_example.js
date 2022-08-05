@@ -1,13 +1,16 @@
 const fs = require("fs");
 const csv = require("csv-parser");
 const fastcsv = require("fast-csv");
+var JSZip = require("jszip");
+var glob = require("glob");
+const TEMP_PATH = "./temp/";
 var zlib = require("zlib");
 var pipeline = require("stream").pipeline;
 
 async function createList() {
   const processedJson = [];
   const csvToJsonParsing = new Promise(function (resolve, reject) {
-    fs.createReadStream("test.csv")
+    fs.createReadStream("5m Sales Records.csv")
       .pipe(csv({ separator: "," }))
       .on("data", (data) => {
         processedJson.push(data);
@@ -26,12 +29,8 @@ async function fileSplitter(processedJson) {
   let startingPoint = 0;
   let linesWritten = 0;
   const chunkSize = parseInt(processedJson.length / 10);
-  console.log(chunkSize);
-  console.log(processedJson.length);
-
   // this reprenents the number of files the original file will be broken into
-  numChunks = Math.ceil(processedJson.length / chunkSize);
-
+  const numChunks = Math.ceil(processedJson.length / chunkSize);
   for (let i = 0; i < numChunks; i++) {
     if (linesWritten >= processedJson.length) {
       break;
@@ -39,7 +38,6 @@ async function fileSplitter(processedJson) {
 
     // the data that will get written into the current smaller file
     const jsonChunk = [];
-
     for (let j = startingPoint; j < startingPoint + chunkSize; j++) {
       jsonChunk.push(processedJson[j]);
       if (j < processedJson.length) {
@@ -47,15 +45,13 @@ async function fileSplitter(processedJson) {
         // if we've reached the chunk increment, increase the starting point to the next increment
         if (j == startingPoint + chunkSize - 1) {
           startingPoint = j + 1;
-          // initiating zlib
           const gzip = zlib.createGzip();
-          // file chunk to be written
+          // write stream for writing files to disk
           const writeStream = await fs.createWriteStream(
-            "./output/file-" + i + ".csv.gz"
+            TEMP_PATH + "file-" + i + ".csv.gz"
           );
-          const options = { headers: true };
-          const generateCsv = fastcsv.write(jsonChunk, options);
-          //generateCsv.pipe(writeStream);
+          // file chunk to be written
+          const generateCsv = fastcsv.write(jsonChunk, { headers: true });
           pipeline(generateCsv, gzip, writeStream, (err) => {
             if (err) {
               console.error(
@@ -67,6 +63,7 @@ async function fileSplitter(processedJson) {
           const jsonToCsv = new Promise(function (resolve, reject) {
             generateCsv
               .on("error", function (err) {
+                console.log(err);
                 reject(err);
               })
               .on("end", function () {
@@ -75,6 +72,16 @@ async function fileSplitter(processedJson) {
           });
           await jsonToCsv;
 
+          writeStream
+            .on("close", (data) => {
+              if (processedJson.length - j < chunkSize) {
+                // zip and delete files and upload to s3
+                zipFile();
+              }
+            })
+            .on("error", (err) => {
+              console.log(err);
+            });
           break;
         }
       }
@@ -89,16 +96,51 @@ async function fileSplitter(processedJson) {
   console.log("File split complete ...");
 }
 
+function cleanUpTemp() {
+  let regex = /^file/;
+  fs.readdirSync(TEMP_PATH)
+    .filter((f) => regex.test(f))
+    .map((f) => fs.unlinkSync(TEMP_PATH + f));
+}
+
+function zipFile() {
+  const zip = new JSZip();
+  
+  glob(TEMP_PATH + "file*", function (err, files) {
+    if (err) {
+      console.log(err);
+    }
+
+
+    for (const file of files) {
+        const fileData = fs.readFileSync(file);
+        zip.file(file.split('/')[file.split('/').length -1], fileData);
+    }
+
+    zip.generateNodeStream({ type: 'nodebuffer', streamFiles: true })
+        .pipe(fs.createWriteStream('./output/final.zip'))
+        .on('finish', function () {
+            console.log("final.zip written.");
+            cleanUpTemp()
+        });
+
+  });
+}
+
 async function driver() {
-  console.log("**** FILE SPLITTER ****");
+  try {
+    console.log("**** FILE SPLITTER ****");
 
-  // get JSON Array of all lines in original file
-  const fileLines = await createList();
+    // get JSON Array of all lines in original file
+    const fileLines = await createList();
 
-  // split into multiple smaller files with original list of lines
-  await fileSplitter(fileLines);
+    // split into multiple smaller files with original list of lines
+    await fileSplitter(fileLines);
 
-  console.log("**** FILE SPLITTER COMPLETE ****");
+    console.log("**** FILE SPLITTER COMPLETE ****");
+  } catch (e) {
+    console.log(e);
+  }
 }
 
 driver();

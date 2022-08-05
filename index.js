@@ -93,7 +93,7 @@ async function fileSplitter(processedJson,initialFileName) {
           //const writeStream = await fs.createWriteStream('./output/file-' + i + '.gz');
           const writeStream = s3Stream.upload({
             Bucket: "large-file-split-output",
-            Key: initialFileName+"/file-" + i + ".csv.gz",
+            Key: initialFileName+"/file-" + i + ".gz",
           });
           // Handle errors.
           writeStream.on("error", function (error) {
