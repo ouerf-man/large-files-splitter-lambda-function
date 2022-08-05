@@ -4,13 +4,11 @@ const fastcsv = require("fast-csv");
 var JSZip = require("jszip");
 var glob = require("glob");
 const TEMP_PATH = "./temp/";
-var zlib = require("zlib");
-var pipeline = require("stream").pipeline;
 
 async function createList() {
   const processedJson = [];
   const csvToJsonParsing = new Promise(function (resolve, reject) {
-    fs.createReadStream("5m Sales Records.csv")
+    fs.createReadStream("test.csv")
       .pipe(csv({ separator: "," }))
       .on("data", (data) => {
         processedJson.push(data);
@@ -45,21 +43,13 @@ async function fileSplitter(processedJson) {
         // if we've reached the chunk increment, increase the starting point to the next increment
         if (j == startingPoint + chunkSize - 1) {
           startingPoint = j + 1;
-          const gzip = zlib.createGzip();
           // write stream for writing files to disk
           const writeStream = await fs.createWriteStream(
-            TEMP_PATH + "file-" + i + ".csv.gz"
+            TEMP_PATH + "file-" + i + ".csv"
           );
           // file chunk to be written
           const generateCsv = fastcsv.write(jsonChunk, { headers: true });
-          pipeline(generateCsv, gzip, writeStream, (err) => {
-            if (err) {
-              console.error(
-                "An Error occured in the Compression Processor:",
-                err
-              );
-            }
-          });
+          generateCsv.pipe(writeStream);
           const jsonToCsv = new Promise(function (resolve, reject) {
             generateCsv
               .on("error", function (err) {
@@ -73,10 +63,10 @@ async function fileSplitter(processedJson) {
           await jsonToCsv;
 
           writeStream
-            .on("close", (data) => {
+            .on("close", async (data) => {
               if (processedJson.length - j < chunkSize) {
                 // zip and delete files and upload to s3
-                zipFile();
+                await zipFile();
               }
             })
             .on("error", (err) => {
@@ -101,12 +91,13 @@ function cleanUpTemp() {
   fs.readdirSync(TEMP_PATH)
     .filter((f) => regex.test(f))
     .map((f) => fs.unlinkSync(TEMP_PATH + f));
+  console.log('CLEANUP SUCCESSFUL');
 }
 
-function zipFile() {
+async function zipFile() {
   const zip = new JSZip();
   
-  glob(TEMP_PATH + "file*", function (err, files) {
+  glob(TEMP_PATH + "file*", async function (err, files) {
     if (err) {
       console.log(err);
     }
@@ -116,9 +107,9 @@ function zipFile() {
         const fileData = fs.readFileSync(file);
         zip.file(file.split('/')[file.split('/').length -1], fileData);
     }
-
+    var ws = await fs.createWriteStream('./output/final.zip')
     zip.generateNodeStream({ type: 'nodebuffer', streamFiles: true })
-        .pipe(fs.createWriteStream('./output/final.zip'))
+        .pipe(ws)
         .on('finish', function () {
             console.log("final.zip written.");
             cleanUpTemp()
