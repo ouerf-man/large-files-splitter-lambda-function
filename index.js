@@ -95,15 +95,8 @@ async function fileSplitter(processedJson, initialFileName) {
 
           const options = { headers: true };
           const generateCsv = fastcsv.write(jsonChunk, options);
-          //generateCsv.pipe(writeStream);
-          pipeline(generateCsv, gzip, writeStream, (err) => {
-            if (err) {
-              console.error(
-                "An Error occured in the Compression Processor:",
-                err
-              );
-            }
-          });
+          generateCsv.pipe(writeStream);
+          
           const jsonToCsv = new Promise(function (resolve, reject) {
             generateCsv
               .on("error", function (err) {
@@ -133,6 +126,7 @@ function cleanUpTemp() {
   fs.readdirSync(TEMP_PATH)
     .filter((f) => regex.test(f))
     .map((f) => fs.unlinkSync(TEMP_PATH + f));
+    console.log('CLEANUP SUCCESSFUL');
 }
 
 function zipFile(initialFileName) {
