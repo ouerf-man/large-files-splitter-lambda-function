@@ -5,8 +5,6 @@ const csv = require("csv-parser");
 const fastcsv = require("fast-csv");
 var JSZip = require("jszip");
 var glob = require("glob");
-var zlib = require("zlib");
-var pipeline = require("stream").pipeline;
 var Readable = require("stream").Readable;
 const TEMP_PATH = "/tmp/";
 const s3 = new aws.S3({ apiVersion: "2006-03-01" });
@@ -57,7 +55,7 @@ async function createList(buffer) {
         resolve();
       });
   });
-
+  
   await csvToJsonParsing;
   return processedJson;
 }
@@ -86,8 +84,6 @@ async function fileSplitter(processedJson, initialFileName) {
         // if we've reached the chunk increment, increase the starting point to the next increment
         if (j == startingPoint + chunkSize - 1) {
           startingPoint = j + 1;
-          // initiating zlib
-          const gzip = zlib.createGzip();
           // file chunk to be written
           const writeStream = await fs
             .createWriteStream(TEMP_PATH + "file-" + i + ".csv.gz")
@@ -110,6 +106,7 @@ async function fileSplitter(processedJson, initialFileName) {
           writeStream.on("close", () => {
             if (processedJson.length - j < chunkSize) {
               // zip and delete files and upload to s3
+              console.log('izibiii')
               zipFile(initialFileName);
             }
           });
