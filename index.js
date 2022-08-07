@@ -1,15 +1,11 @@
 console.log("Loading function");
-const fs = require("fs");
 const aws = require("aws-sdk");
 const csv = require("csv-parser");
 const fastcsv = require("fast-csv");
-var JSZip = require("jszip");
-var glob = require("glob");
+const archiver = require("archiver");
 var Readable = require("stream").Readable;
-const TEMP_PATH = "/tmp/";
 const s3 = new aws.S3({ apiVersion: "2006-03-01" });
-
-const s3Stream = require("s3-upload-stream")(s3);
+const stream = require("stream");
 
 exports.handler = async (event, context) => {
   //console.log('Received event:', JSON.stringify(event, null, 2));
@@ -19,6 +15,7 @@ exports.handler = async (event, context) => {
   const key = decodeURIComponent(
     event.Records[0].s3.object.key.replace(/\+/g, " ")
   );
+  console.log(key);
   const params = {
     Bucket: bucket,
     Key: key,
@@ -55,13 +52,15 @@ async function createList(buffer) {
         resolve();
       });
   });
-  
+
   await csvToJsonParsing;
   return processedJson;
 }
 
 async function fileSplitter(processedJson, initialFileName) {
+  const archive = archiver("zip", { zlib: { level: 9 } });
   console.log("Splitting original file...");
+  const promises = [];
   let startingPoint = 0;
   let linesWritten = 0;
   const chunkSize = parseInt(processedJson.length / 10);
@@ -84,96 +83,36 @@ async function fileSplitter(processedJson, initialFileName) {
         // if we've reached the chunk increment, increase the starting point to the next increment
         if (j == startingPoint + chunkSize - 1) {
           startingPoint = j + 1;
-          // file chunk to be written
-          const writeStream = await fs
-            .createWriteStream(TEMP_PATH + "file-" + i + ".csv.gz")
-            
-
-          const options = { headers: true };
-          const generateCsv = fastcsv.write(jsonChunk, options);
-          generateCsv.pipe(writeStream);
-          
-          const jsonToCsv = new Promise(function (resolve, reject) {
-            generateCsv
-              .on("error", function (err) {
-                reject(err);
-              })
-              .on("end", function () {
-                resolve();
-              });
-          });
-          await jsonToCsv;
-          writeStream.on("close", () => {
-            if (processedJson.length - j < chunkSize) {
-              // zip and delete files and upload to s3
-              console.log('izibiii')
-              zipFile(initialFileName);
-            }
-          });
+          promises.push(fastcsv.writeToBuffer(jsonChunk, { headers: true }));
           break;
         }
       }
     }
+    if (i == numChunks - 1) {
+      const used = process.memoryUsage().heapUsed / 1024 / 1024;
+      console.log(
+        `The script uses approximately ${Math.round(used * 100) / 100} MB`
+      );
+    }
   }
-  console.log("File split complete ...");
-}
-
-function cleanUpTemp() {
-  let regex = /^file/;
-  fs.readdirSync(TEMP_PATH)
-    .filter((f) => regex.test(f))
-    .map((f) => fs.unlinkSync(TEMP_PATH + f));
-    console.log('CLEANUP SUCCESSFUL');
-}
-
-function zipFile(initialFileName) {
-  const zip = new JSZip();
-
-  glob(TEMP_PATH + "file*", function (err, files) {
-    if (err) {
-      console.log(err);
-    }
-
-    for (const file of files) {
-      const fileData = fs.readFileSync(file);
-      zip.file(file.split("/")[file.split("/").length - 1], fileData);
-    }
-    const writeStream = s3Stream.upload({
-      Bucket: "large-file-split-output",
-      Key: initialFileName + ".zip",
+  archive.pipe(uploadFromStream(s3, initialFileName));
+  return Promise.all(promises).then(async (data) => {
+    data.map((thisFile, index) => {
+      archive.append(thisFile, { name: `file${index}.csv` });
     });
-    // Handle errors.
-    writeStream.on("error", function (error) {
-      console.log(error);
-    });
-
-    /* Handle progress. Example details object:
-                { ETag: '"f9ef956c83756a80ad62f54ae5e7d34b"',
-                PartNumber: 5,
-                receivedSize: 29671068,
-                uploadedSize: 29671068 }
-            */
-    writeStream.on("part", function (details) {
-      console.log("part");
-    });
-
-    /* Handle upload completion. Example details object:
-                { Location: 'https://bucketName.s3.amazonaws.com/filename.ext',
-                Bucket: 'bucketName',
-                Key: 'filename.ext',
-                ETag: '"bf2acbedf84207d696c8da7dbb205b9f-5"' }
-            */
-    writeStream.on("uploaded", function (details) {
-      console.log("part uploaded");
-    });
-    zip
-      .generateNodeStream({ type: "nodebuffer", streamFiles: true })
-      .pipe(writeStream)
-      .on("finish", function () {
-        console.log("final.zip written.");
-        cleanUpTemp();
-      });
+    await archive.finalize();
   });
+}
+
+function uploadFromStream(s3,initialFileName) {
+  var pass = new stream.PassThrough();
+
+  var params = {Bucket: "large-file-split-output", Key: initialFileName + ".zip", Body: pass};
+  s3.upload(params, function(err, data) {
+    console.log(err, data);
+  });
+
+  return pass;
 }
 
 async function driver(buffer, key) {

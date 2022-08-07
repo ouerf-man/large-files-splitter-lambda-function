@@ -9,11 +9,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "archiver": "^5.3.1",
+    "aws-sdk": "^2.1189.0",
     "csv-parser": "^3.0.0",
     "fast-csv": "^4.3.6",
-    "glob": "^8.0.3",
-    "jszip": "^3.10.1",
-    "s3-upload-stream": "^1.0.7",
-    "zlib": "^1.0.5"
+    "s3-upload-stream": "^1.0.7"
   }
 }
