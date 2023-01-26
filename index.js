@@ -1,4 +1,10 @@
+/* CONSTANTS */
+const OUTPUT_BUCKET = "large-file-split-output"
+
+
 console.log("Loading function");
+console.log("THE OUTPUT BUCKET IS", OUTPUT_BUCKET)
+
 const aws = require("aws-sdk");
 const csv = require("csv-parser");
 const fastcsv = require("fast-csv");
@@ -6,7 +12,6 @@ const archiver = require("archiver");
 var Readable = require("stream").Readable;
 const s3 = new aws.S3({ apiVersion: "2006-03-01" });
 const stream = require("stream");
-
 exports.handler = async (event, context) => {
   //console.log('Received event:', JSON.stringify(event, null, 2));
 
@@ -24,9 +29,9 @@ exports.handler = async (event, context) => {
     // logic here
     const { Body } = await s3.getObject(params).promise();
     // driver does all the job
-    await driver(Body, key);
+    return await driver(Body, key);
 
-    return 1;
+    
   } catch (err) {
     console.log(err);
     const message = `Error getting object ${key} from bucket ${bucket}. Make sure they exist and your bucket is in the same region as this function.`;
@@ -57,7 +62,7 @@ async function createList(buffer) {
   return processedJson;
 }
 
-async function fileSplitter(processedJson, initialFileName) {
+async function fileSplitter(processedJson, initialFileName, resolve) {
   const archive = archiver("zip", { zlib: { level: 9 } });
   console.log("Splitting original file...");
   const promises = [];
@@ -95,33 +100,38 @@ async function fileSplitter(processedJson, initialFileName) {
       );
     }
   }
-  archive.pipe(uploadFromStream(s3, initialFileName));
+  const writeStream = uploadFromStream(s3, initialFileName, resolve)
+  writeStream.on('finish', () =>console.log('finished'))
+  archive.pipe(writeStream);
   return Promise.all(promises).then(async (data) => {
     data.map((thisFile, index) => {
       archive.append(thisFile, { name: `file${index}.csv` });
     });
-    await archive.finalize();
+    return await archive.finalize();
   });
 }
 
-function uploadFromStream(s3,initialFileName) {
+function uploadFromStream(s3,initialFileName, resolve) {
   var pass = new stream.PassThrough();
 
-  var params = {Bucket: "large-file-split-output", Key: initialFileName + ".zip", Body: pass};
+  var params = {Bucket: OUTPUT_BUCKET, Key: initialFileName + ".zip", Body: pass};
   s3.upload(params, function(err, data) {
     console.log(err, data);
+    resolve(1)
   });
 
   return pass;
 }
 
 async function driver(buffer, key) {
-  console.log("**** FILE SPLITTER ****");
+  return new Promise(async (resolve, reject) => {
+    console.log("**** FILE SPLITTER ****");
 
   // get JSON Array of all lines in original file
   const fileLines = await createList(buffer);
   // split into multiple smaller files with original list of lines
-  await fileSplitter(fileLines, key);
+  await fileSplitter(fileLines, key, resolve)
 
   console.log("**** FILE SPLITTER COMPLETE ****");
+  })
 }
